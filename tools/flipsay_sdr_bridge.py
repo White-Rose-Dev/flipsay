@@ -426,8 +426,10 @@ def selftest():
         cli.sendall(struct.pack(">BI", CMD_RATE, rate))
         cli.sendall(struct.pack(">BI", CMD_FREQ, freq))
         cli.sendall(struct.pack(">BI", CMD_GAIN, 200))
-        time.sleep(0.6)
         cli.settimeout(10)
+        t_end = time.time() + 1.2  # flush samples buffered before the retune
+        while time.time() < t_end:
+            cli.recv(1 << 20)
         need = blocks * Synth.N * 2
         data = b""
         while len(data) < need + 400000:
