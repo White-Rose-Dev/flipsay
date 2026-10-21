@@ -2,6 +2,8 @@
 
 SDR Mode turns FlipSay into a spectrum source for any **rtl_tcp** client: [GQRX](https://gqrx.dk) on Linux and macOS, and [SDR++](https://github.com/AlexandreRouma/SDRPlusPlus) on Windows (GQRX has no Windows build). Read the limits first, because this is not what a real SDR does.
 
+**Windows users:** follow the step-by-step guide [Connect FlipSay to SDR++](SDR_PLUSPLUS.md).
+
 ## What you get, and what you do not
 
 | You get | You do not get |
