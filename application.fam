@@ -1,0 +1,16 @@
+App(
+    appid="flipsay",
+    name="FlipSay FAP",
+    apptype=FlipperAppType.EXTERNAL,
+    entry_point="flipsay_app",
+    requires=["gui", "storage", "notification"],
+    stack_size=4 * 1024,
+    order=20,
+    fap_category="Sub-GHz",
+    fap_icon="flipsay.png",
+    fap_version=(0, 2),
+    fap_author="itsc0c0",
+    fap_weburl="https://github.com/itsc0c0/flipsay",
+    fap_description="Mini SDR-style spectrum analyzer with auto decode, multi-window Wi-Fi/NRF24/CC1101 view and GQRX link",
+    sources=["src/*.c"],
+)

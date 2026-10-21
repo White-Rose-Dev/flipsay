@@ -1,0 +1,10 @@
+dist/
+.vscode/
+.clangd
+.ufbt/
+*.elf
+*.o
+release/*.fap
+*.mp4
+__pycache__/
+*.pyc
