@@ -1,6 +1,6 @@
 # FlipSay FAP
 
-A mini SDR-style spectrum analyzer and Sub-GHz auto decoder for the Flipper Zero. It works with the internal CC1101, an external CC1101 and an external NRF24L01+.
+A software-controlled, SDR-style spectrum analyzer and Sub-GHz auto decoder for the Flipper Zero. It works with the internal CC1101, an external CC1101 and an external NRF24L01+. You tune, zoom, set the receiver gain and pick views from software, but the picture is built from signal-strength (RSSI) sweeps, not IQ samples, so read [Limits and how it compares](#limits-and-how-it-compares) before expecting HackRF-style results.
 
 This repository used to hold the browser-based version of FlipSay. That version is retired, and its downloads are still available as [Public Beta 1 and Public Beta 2](https://github.com/itsc0c0/flipsay/releases) on the Releases page (the old source stays in the git history, tag `web-legacy`).
 
@@ -12,7 +12,7 @@ This repository used to hold the browser-based version of FlipSay. That version 
 - [About FlipSay (in-app guide)](#about-flipsay-in-app-guide)
 - [Wi-Fi module](#wi-fi-module-marauder)
 - [SDR Mode and GQRX](#sdr-mode-and-gqrx)
-- [What it is not](#what-it-is-not)
+- [Limits and how it compares](#limits-and-how-it-compares)
 - [Requirements and install](#requirements-and-install)
 - [How to use](#how-to-use)
 - [Options reference](#options-reference)
@@ -143,15 +143,24 @@ Multi Use can show the **official Flipper Zero Wi-Fi Devboard** running **ESP32 
 ### Under the hood
 - A real boot loading bar that shows the actual startup steps (see [How to use](#how-to-use)).
 - Lite Mode, a live memory and stack readout, and low-memory guards that show a message instead of crashing.
-## What it is not
+## Limits and how it compares
 
-- It is **not a true SDR**. The CC1101 gives signal strength (RSSI) and pulse timings, not IQ samples. The spectrum is built by stepping the frequency and reading RSSI, at roughly 2-10 sweeps per second depending on speed and resolution.
+### What "SDR-style" means here
+- The receiver is configured entirely by software: frequency, span, bandwidth, gain stages, views, triggers. That part is SDR-like.
+- The CC1101 does not give IQ samples. It gives signal strength (RSSI) and pulse timings. The spectrum is built by stepping the frequency and reading RSSI, at roughly 2-10 sweeps per second depending on speed and resolution. Because of that:
+  - The waterfall is a coarse activity view, not a detailed one. Use it to see **where and when** something transmits, then use the Scope or a capture to look closer.
+  - Nothing can be demodulated from the spectrum. There is no audio.
 - The NRF24 only reports carrier detect, so its levels are shown as activity percent.
+- **SDR Mode** gives SDR++ or GQRX a spectrum and waterfall only. The IQ stream is synthesized from the sweep, so a client cannot demodulate it.
+
+### Where it fits
+- It is not a replacement for a real SDR such as a HackRF with PortaPack Mayhem, which has real IQ and can transmit. It is meant for hardware you already own: it puts the internal CC1101, an external CC1101, the NRF24 and a Wi-Fi devboard on one screen, in one app.
+- Some things overlap with the stock Sub-GHz app. *Read RAW* already has an RSSI threshold, and *Read* already decodes known protocols. What FlipSay adds is that it finds the frequency for you: Auto Decode watches the common remote frequencies plus the strongest peak from the spectrum, decodes with the firmware's protocol library, and saves the `.sub` files automatically. It decodes the remote-style protocols only (weather, TPMS and sensor protocols are ignored), so it will not decode everything the stock app can.
+
+### Other limits
 - **Receive only.** There is no transmit function.
 - Auto Decode uses one radio at a time. It cannot decode two frequencies simultaneously.
-- **SDR Mode** gives GQRX a spectrum and waterfall only. The IQ stream is synthesized from the sweep, so GQRX cannot demodulate it and there is no audio.
 - The Wi-Fi window is passive and needs Marauder firmware on the devboard.
-
 ## Requirements and install
 
 - Flipper Zero running [Momentum firmware](https://momentum-fw.dev) (dev channel recommended).
