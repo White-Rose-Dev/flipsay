@@ -32,3 +32,8 @@ They share MOSI, MISO, SCK and pin 6, but they need **different CS pins**:
 - *Options > Radio & Pins > Pin Layout* shows this table on the device.
 - The app changes the SPI-handle settings only while it is running and restores your Momentum settings on exit.
 - Parallel Gather with a second radio adds current draw and heat. Read the in-app warnings first.
+
+## Firmware notes
+
+- **Momentum:** the chip-select pin of the CC1101 and of the NRF24 can each be set to pin 4 or pin 7 (*Options > Radio & Pins*), so both can be wired at once.
+- **Unleashed / RogueMaster:** the chip select is fixed on pin 4. Use either the external CC1101 or the NRF24 on the header at a time. TTX DUAL mode (internal + external CC1101) works the same way as on Momentum.

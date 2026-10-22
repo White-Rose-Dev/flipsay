@@ -1,6 +1,5 @@
 #include "flipsay.h"
 
-#include <momentum/momentum.h>
 #include <expansion/expansion.h>
 #include <lib/drivers/cc1101_regs.h>
 #include <lib/subghz/devices/cc1101_configs.h>
@@ -9,6 +8,7 @@
 #include <lib/subghz/types.h>
 #include <lib/subghz/environment.h>
 #include <lib/subghz/receiver.h>
+#include <lib/subghz/transmitter.h>
 #include <lib/subghz/registry.h>
 #include <lib/subghz/subghz_protocol_registry.h>
 #include <toolbox/stream/stream.h>
@@ -159,6 +159,8 @@ typedef struct {
     uint8_t nrf_toggle;
     struct WifiIo* wio;
     bool sdr_on;
+    bool ttx_on;
+    bool ttx_ext_tried;
     uint8_t sdr_gain_seen;
     uint8_t pkt_ch;
     uint32_t pkt_win_t;
@@ -176,15 +178,11 @@ void fs_worker_post(FsApp* app, const char* msg) {
 /* ---------- SPI / raw probes ---------- */
 
 static const FuriHalSpiBusHandle* cc_handle(void) {
-    return momentum_settings.spi_cc1101_handle == SpiDefault ?
-               &furi_hal_spi_bus_handle_external :
-               &furi_hal_spi_bus_handle_external_extra;
+    return fs_fw_cc_spi();
 }
 
 static const FuriHalSpiBusHandle* nrf_handle(void) {
-    return momentum_settings.spi_nrf24_handle == SpiDefault ?
-               &furi_hal_spi_bus_handle_external :
-               &furi_hal_spi_bus_handle_external_extra;
+    return fs_fw_nrf_spi();
 }
 
 static const GpioPin* other_cs(const FuriHalSpiBusHandle* h) {
@@ -1350,7 +1348,7 @@ static void wifi_open(Ctx* rc, const FsConfig* c) {
     w->rx = furi_stream_buffer_alloc(2048, 1);
     w->exp = furi_record_open(RECORD_EXPANSION);
     expansion_disable(w->exp);
-    w->ser = furi_hal_serial_control_acquire(momentum_settings.uart_esp_channel);
+    w->ser = furi_hal_serial_control_acquire(fs_fw_esp_uart());
     if(!w->ser) {
         s->state = FsWifiBusy;
         w->st = WifiStDead;
@@ -1737,14 +1735,20 @@ static bool decode_alloc(Ctx* rc) {
     size_t total = subghz_protocol_registry_count(&subghz_protocol_registry);
     d->items = malloc(total * sizeof(SubGhzProtocol*));
     size_t n = 0;
+#ifdef FS_FW_MOMENTUM
     const uint32_t ignore = SubGhzProtocolFilter_Weather | SubGhzProtocolFilter_Sensors |
                             SubGhzProtocolFilter_TPMS;
+#endif
     for(size_t i = 0; i < total; i++) {
         const SubGhzProtocol* p = subghz_protocol_registry_get_by_index(&subghz_protocol_registry, i);
         if(!p) continue;
         if(!(p->flag & SubGhzProtocolFlag_Save)) continue;
         if(p->type != SubGhzProtocolTypeStatic && p->type != SubGhzProtocolTypeDynamic) continue;
+#ifdef FS_FW_MOMENTUM
         if((uint32_t)p->filter & ignore) continue;
+#else
+        if(p->flag & SubGhzProtocolFlag_Sensors) continue;
+#endif
         d->items[n++] = p;
     }
     d->reg = malloc(sizeof(SubGhzProtocolRegistry));
@@ -1883,8 +1887,10 @@ static bool decode_session(Ctx* rc, uint32_t khz, int thr_dbm) {
         d->got = false;
         furi_string_set_str(d->preset.name, pn[k]);
         d->preset.frequency = khz * 1000UL;
+#ifdef FS_FW_MOMENTUM
         d->preset.latitude = 0;
         d->preset.longitude = 0;
+#endif
         subghz_receiver_reset(d->rx);
         d->have = false;
         d->ld = 0;
@@ -2115,6 +2121,331 @@ static void sdr_step(Ctx* rc, FsConfig* c) {
     }
     furi_delay_ms(1);
 }
+/* ---------- TTX: transmit a .sub file on one or two antennas ---------- */
+
+#define TTX_MAX_MS  20000
+#define TTX_HOLD_MS 600
+
+typedef struct {
+    const SubGhzDevice* dev;
+    SubGhzTransmitter* tx;
+    FlipperFormat* ff;
+    bool armed;
+} TtxAnt;
+
+static uint8_t ttx_check(const SubGhzDevice* dev, uint32_t hz) {
+    if(!dev) return FsTtxAntNoRadio;
+    if(!subghz_devices_is_frequency_valid(dev, hz)) return FsTtxAntUnsupported;
+#ifdef FS_FW_MOMENTUM
+    switch(subghz_devices_check_tx(dev, hz)) {
+    case SubGhzTxAllowed:
+        return FsTtxAntReady;
+    case SubGhzTxBlockedRegionNotProvisioned:
+    case SubGhzTxBlockedRegion:
+        return FsTtxAntBlockedRegion;
+    case SubGhzTxBlockedDefault:
+        return FsTtxAntBlockedBand;
+    default:
+        return FsTtxAntUnsupported;
+    }
+#else
+    return furi_hal_subghz_is_tx_allowed(hz) ? FsTtxAntReady : FsTtxAntBlockedRegion;
+#endif
+}
+
+static const SubGhzDevice* ttx_dev(Ctx* rc, const FsConfig* c, int ant, uint8_t* why) {
+    *why = FsTtxAntNoRadio;
+    if(ant == 0) {
+        if(!rc->int_open) open_int(rc);
+        return rc->int_open ? rc->dev_int : NULL;
+    }
+    if(rc->nrf_held) {
+        *why = FsTtxAntBusBusy;
+        return NULL;
+    }
+    if(!rc->ext_open && !rc->ttx_ext_tried) {
+        rc->ttx_ext_tried = true;
+        otg_on(rc, c);
+        open_ext(rc);
+    }
+    return rc->ext_open ? rc->dev_ext : NULL;
+}
+
+static bool ttx_read_preset(Storage* st, const char* path, int* std_idx, uint8_t* data, size_t cap) {
+    FlipperFormat* ff = flipper_format_file_alloc(st);
+    FuriString* s = furi_string_alloc();
+    bool ok = false;
+    do {
+        if(!flipper_format_file_open_existing(ff, path)) break;
+        if(!flipper_format_read_string(ff, "Preset", s)) break;
+        for(int i = 0; i < 7; i++) {
+            if(!strcmp(furi_string_get_cstr(s), mod_name_tab[i])) {
+                *std_idx = i;
+                ok = true;
+                break;
+            }
+        }
+        if(ok) break;
+        if(strcmp(furi_string_get_cstr(s), "FuriHalSubGhzPresetCustom")) break;
+        flipper_format_rewind(ff);
+        uint32_t cnt = 0;
+        if(!flipper_format_get_value_count(ff, "Custom_preset_data", &cnt)) break;
+        if(cnt < 10 || cnt > cap) break;
+        if(!flipper_format_read_hex(ff, "Custom_preset_data", data, cnt)) break;
+        size_t i = 0;
+        while(i + 1 < cnt && data[i] != 0) i += 2;
+        if(i + 2 + 8 != cnt) break;
+        *std_idx = -1;
+        ok = true;
+    } while(false);
+    furi_string_free(s);
+    flipper_format_free(ff);
+    return ok;
+}
+
+static SubGhzEnvironment* ttx_env_alloc(void) {
+    SubGhzEnvironment* env = subghz_environment_alloc();
+    subghz_environment_load_keystore(env, SUBGHZ_KEYSTORE_DIR_NAME);
+    subghz_environment_load_keystore(env, SUBGHZ_KEYSTORE_DIR_USER_NAME);
+    subghz_environment_set_alutech_at_4n_rainbow_table_file_name(env, SUBGHZ_ALUTECH_AT_4N_DIR_NAME);
+    subghz_environment_set_nice_flor_s_rainbow_table_file_name(env, SUBGHZ_NICE_FLOR_S_DIR_NAME);
+    subghz_environment_set_came_atomo_rainbow_table_file_name(env, SUBGHZ_CAME_ATOMO_DIR_NAME);
+    subghz_environment_set_protocol_registry(env, &subghz_protocol_registry);
+    return env;
+}
+
+static void ttx_ant_release(TtxAnt* a) {
+    if(a->armed) {
+        subghz_devices_stop_async_tx(a->dev);
+        a->armed = false;
+    }
+    if(a->tx) {
+        subghz_transmitter_stop(a->tx);
+        subghz_transmitter_free(a->tx);
+        a->tx = NULL;
+    }
+    if(a->ff) {
+        flipper_format_free(a->ff);
+        a->ff = NULL;
+    }
+    if(a->dev) subghz_devices_idle(a->dev);
+}
+
+static bool ttx_stop_wanted(Ctx* rc, FsTtx* t, uint32_t t0) {
+    uint32_t now = furi_get_tick();
+    if(!rc->app->worker_run || rc->app->worker_mode != FsModeTtx) return true;
+    uint32_t h = t->hold_tick;
+    if(h == 0 || now - h > TTX_HOLD_MS) return true;
+    return (now - t0) > TTX_MAX_MS;
+}
+
+static const char* ttx_ant_msg(uint8_t why) {
+    switch(why) {
+    case FsTtxAntBusBusy:
+        return "EXT BUS BUSY (NRF)";
+    case FsTtxAntBlockedRegion:
+        return "BLOCKED BY REGION";
+    case FsTtxAntBlockedBand:
+        return "BAND NOT ENABLED";
+    case FsTtxAntUnsupported:
+        return "FREQ UNSUPPORTED";
+    default:
+        return "RADIO NOT FOUND";
+    }
+}
+
+static void ttx_session(
+    Ctx* rc,
+    const FsConfig* c,
+    FsTtx* t,
+    const char* path,
+    const char* proto,
+    uint8_t mode,
+    const uint32_t* khz,
+    uint8_t passes) {
+    FsApp* app = rc->app;
+    TtxAnt ant[2];
+    memset(ant, 0, sizeof(ant));
+    const bool use[2] = {mode != FsTtxModeExt, mode != FsTtxModeInt};
+    SubGhzEnvironment* env = NULL;
+    const char* err = NULL;
+    uint8_t preset_buf[96];
+    int preset_idx = -2;
+    uint8_t done_passes = 0;
+    bool stopped_by_user = false;
+    const uint32_t t0 = furi_get_tick();
+    t->t_start = t0;
+    t->both_started = false;
+    t->start_delta_us = 0;
+    t->pass_all = passes;
+
+    do {
+        for(int i = 0; i < 2; i++) {
+            if(!use[i]) continue;
+            uint8_t why = FsTtxAntNoRadio;
+            ant[i].dev = ttx_dev(rc, c, i, &why);
+            uint8_t st = ant[i].dev ? ttx_check(ant[i].dev, khz[i] * 1000UL) : why;
+            if(st != FsTtxAntReady) {
+                err = ttx_ant_msg(st);
+                break;
+            }
+        }
+        if(err) break;
+        if(!ttx_read_preset(app->storage, path, &preset_idx, preset_buf, sizeof(preset_buf))) {
+            err = "BAD OR UNKNOWN PRESET";
+            break;
+        }
+        if(memmgr_get_free_heap() < 18 * 1024) {
+            err = "LOW MEMORY";
+            break;
+        }
+        env = ttx_env_alloc();
+
+        for(int pass = 0; pass < passes && !err; pass++) {
+            t->pass_now = (uint8_t)(pass + 1);
+            for(int i = 0; i < 2 && !err; i++) {
+                if(!use[i]) continue;
+                TtxAnt* a = &ant[i];
+                a->ff = flipper_format_file_alloc(app->storage);
+                if(!flipper_format_file_open_existing(a->ff, path)) {
+                    err = "FILE READ ERROR";
+                    break;
+                }
+                a->tx = subghz_transmitter_alloc_init(env, proto);
+                if(!a->tx) {
+                    err = "NO ENCODER FOR PROTOCOL";
+                    break;
+                }
+                if(subghz_transmitter_deserialize(a->tx, a->ff) != SubGhzProtocolStatusOk) {
+                    err = "FILE DATA INVALID";
+                    break;
+                }
+                subghz_devices_reset(a->dev);
+                subghz_devices_idle(a->dev);
+                subghz_devices_load_preset(
+                    a->dev,
+                    preset_idx >= 0 ? mod_preset_tab[preset_idx] : FuriHalSubGhzPresetCustom,
+                    preset_idx >= 0 ? NULL : preset_buf);
+                subghz_devices_idle(a->dev);
+                subghz_devices_set_frequency(a->dev, khz[i] * 1000UL);
+            }
+            if(err) break;
+            if(ttx_stop_wanted(rc, t, t0)) {
+                stopped_by_user = true;
+                break;
+            }
+            for(int i = 0; i < 2 && !err; i++) {
+                if(use[i] && !subghz_devices_set_tx(ant[i].dev)) err = "TX REFUSED BY FIRMWARE";
+            }
+            if(err) break;
+
+            FuriHalCortexTimer tm[2];
+            int started = 0;
+            for(int i = 0; i < 2; i++) {
+                if(!use[i]) continue;
+                tm[i] = furi_hal_cortex_timer_get(0);
+                ant[i].armed = subghz_devices_start_async_tx(
+                    ant[i].dev, subghz_transmitter_yield, ant[i].tx);
+                if(!ant[i].armed) {
+                    err = "TX START FAILED";
+                    break;
+                }
+                started++;
+            }
+            if(!err && started == 2) {
+                uint32_t cyc = tm[1].start - tm[0].start;
+                uint32_t ipus = furi_hal_cortex_instructions_per_microsecond();
+                t->start_delta_us = (uint16_t)(ipus ? cyc / ipus : 0);
+                t->both_started = true;
+            }
+            while(!err) {
+                bool all_done = true;
+                for(int i = 0; i < 2; i++) {
+                    if(ant[i].armed && !subghz_devices_is_async_complete_tx(ant[i].dev))
+                        all_done = false;
+                }
+                if(all_done) break;
+                if(ttx_stop_wanted(rc, t, t0)) {
+                    stopped_by_user = true;
+                    break;
+                }
+                furi_delay_ms(4);
+            }
+            for(int i = 0; i < 2; i++) ttx_ant_release(&ant[i]);
+            if(err || stopped_by_user) break;
+            done_passes++;
+            if(pass + 1 < passes) furi_delay_ms(120);
+        }
+    } while(false);
+
+    for(int i = 0; i < 2; i++) ttx_ant_release(&ant[i]);
+    if(env) subghz_environment_free(env);
+    rc->hw_mode = -1;
+    t->t_end = furi_get_tick();
+    if(err) {
+        copy_str(t->msg, sizeof(t->msg), err);
+        t->state = FsTtxError;
+    } else if(stopped_by_user) {
+        copy_str(t->msg, sizeof(t->msg), done_passes ? "STOPPED" : "STOPPED EARLY");
+        t->state = FsTtxDone;
+    } else {
+        copy_str(t->msg, sizeof(t->msg), "SENT");
+        t->state = FsTtxDone;
+    }
+}
+
+static void ttx_step(Ctx* rc, const FsConfig* c) {
+    FsApp* app = rc->app;
+    uint32_t khz[2] = {0, 0};
+    uint8_t mode = 0, passes = 1;
+    bool go = false;
+    char path[112], proto[24];
+    path[0] = 0;
+    proto[0] = 0;
+
+    furi_mutex_acquire(app->mtx, FuriWaitForever);
+    FsTtx* t = app->ttx;
+    if(t) {
+        mode = t->mode;
+        khz[0] = t->khz[0];
+        khz[1] = t->khz[1];
+        if(t->cmd == 1 && t->state != FsTtxSending) {
+            go = true;
+            t->cmd = 0;
+            t->state = FsTtxSending;
+            t->msg[0] = 0;
+            t->pass_now = 0;
+            passes = t->passes;
+            copy_str(path, sizeof(path), t->path);
+            copy_str(proto, sizeof(proto), t->proto);
+        }
+    }
+    furi_mutex_release(app->mtx);
+    if(!t) {
+        furi_delay_ms(30);
+        return;
+    }
+
+    uint8_t st[2] = {FsTtxAntUnknown, FsTtxAntUnknown};
+    for(int i = 0; i < 2; i++) {
+        if((i == 0 && mode == FsTtxModeExt) || (i == 1 && mode == FsTtxModeInt)) continue;
+        uint8_t why = FsTtxAntNoRadio;
+        const SubGhzDevice* d = ttx_dev(rc, c, i, &why);
+        st[i] = d ? ttx_check(d, khz[i] * 1000UL) : why;
+    }
+    furi_mutex_acquire(app->mtx, FuriWaitForever);
+    if(app->ttx == t) {
+        t->ant[0] = st[0];
+        t->ant[1] = st[1];
+    }
+    furi_mutex_release(app->mtx);
+
+    if(go) {
+        ttx_session(rc, c, t, path, proto, mode, khz, passes > 3 ? 3 : (passes ? passes : 1));
+    } else {
+        furi_delay_ms(25);
+    }
+}
 /* ---------- thread ---------- */
 
 static int32_t worker_thread(void* ctx) {
@@ -2164,7 +2495,8 @@ static int32_t worker_thread(void* ctx) {
         furi_mutex_release(app->mtx);
         rc->raw_mode = mode;
         const bool sdr_want = ok && mode == FsModeSdr;
-        const bool multi = ok && app->multi_active && !sdr_want;
+        const bool ttx_want = ok && mode == FsModeTtx;
+        const bool multi = ok && app->multi_active && !sdr_want && !ttx_want;
         if(multi) mode = FsModeSweep;
         rc->cur_mode = mode;
 
@@ -2205,6 +2537,25 @@ static int32_t worker_thread(void* ctx) {
         }
         if(sdr_want) {
             sdr_step(rc, &c);
+            continue;
+        }
+        if(ttx_want && !rc->ttx_on) {
+            if(rc->wio) wifi_close(rc);
+            decode_free(rc);
+            if(rc->async_on && rc->dev) {
+                subghz_devices_stop_async_rx(rc->dev);
+                rc->async_on = false;
+                ring_release();
+            }
+            rc->ttx_on = true;
+            rc->ttx_ext_tried = false;
+        }
+        if(!ttx_want && rc->ttx_on) {
+            rc->ttx_on = false;
+            rc->hw_mode = -1;
+        }
+        if(ttx_want) {
+            ttx_step(rc, &c);
             continue;
         }
         if(!multi && rc->wio) wifi_close(rc);
@@ -2274,7 +2625,7 @@ void fs_worker_start(FsApp* app) {
     app->status = FsStatusStarting;
     app->radio = FsRadioNone;
     app->worker_run = true;
-    app->worker = furi_thread_alloc_ex("FlipSayRadio", 6144, worker_thread, app);
+    app->worker = furi_thread_alloc_ex("FlipSayRadio", 7168, worker_thread, app);
     furi_thread_start(app->worker);
 }
 

@@ -1,6 +1,5 @@
 #include "flipsay.h"
 
-#include <momentum/momentum.h>
 #include <string.h>
 
 #define TAG "FlipSay"
@@ -65,8 +64,8 @@ int32_t flipsay_app(void* p) {
     fs_ui_set_view(app, (FsView)app->cfg.view);
 
     boot_step(app, 34, "CONFIGURING PINS");
-    app->orig_spi_cc = momentum_settings.spi_cc1101_handle == SpiExtra ? 1 : 0;
-    app->orig_spi_nrf = momentum_settings.spi_nrf24_handle == SpiExtra ? 1 : 0;
+    app->orig_spi_cc = (uint8_t)fs_fw_cc_pin_alt();
+    app->orig_spi_nrf = (uint8_t)fs_fw_nrf_pin_alt();
     if(!app->cfg.pad[1]) {
         app->cfg.pin_cc = app->orig_spi_cc;
         app->cfg.pin_nrf = app->orig_spi_nrf;

@@ -1,6 +1,5 @@
 #include "flipsay.h"
 
-#include <momentum/momentum.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -12,13 +11,11 @@ void fs_io_ensure_dirs(Storage* st) {
 }
 
 void fs_apply_pins(FsApp* app) {
-    momentum_settings.spi_cc1101_handle = app->cfg.pin_cc ? SpiExtra : SpiDefault;
-    momentum_settings.spi_nrf24_handle = app->cfg.pin_nrf ? SpiExtra : SpiDefault;
+    fs_fw_set_pins(app->cfg.pin_cc, app->cfg.pin_nrf);
 }
 
 void fs_restore_pins(FsApp* app) {
-    momentum_settings.spi_cc1101_handle = app->orig_spi_cc ? SpiExtra : SpiDefault;
-    momentum_settings.spi_nrf24_handle = app->orig_spi_nrf ? SpiExtra : SpiDefault;
+    fs_fw_set_pins(app->orig_spi_cc, app->orig_spi_nrf);
 }
 
 void fs_cfg_defaults(FsConfig* c) {

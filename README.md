@@ -4,13 +4,14 @@ A software-controlled, SDR-style spectrum analyzer and Sub-GHz auto decoder for 
 
 This repository used to hold the browser-based version of FlipSay. That version is retired, and its downloads are still available as [Public Beta 1 and Public Beta 2](https://github.com/itsc0c0/flipsay/releases) on the Releases page (the old source stays in the git history, tag `web-legacy`).
 
-> **Status: early release (0.2.1).** Built and checked against Momentum firmware `dev` (SDK `d3f89dfe`, API 87.1). Hardware testing is ongoing, so expect rough edges. If something crashes or misbehaves, open an issue and attach `trace.log` (see [Troubleshooting](docs/TROUBLESHOOTING.md)).
+> **Status: early release (0.2.2).** Builds for **Momentum** (`dev`, API 87.1) and **Unleashed / RogueMaster** (API 88.x). Hardware testing is ongoing, so expect rough edges. If something crashes or misbehaves, open an issue and attach `trace.log` (see [Troubleshooting](docs/TROUBLESHOOTING.md)).
 
 ## Contents
 
 - [Features](#features)
 - [About FlipSay (in-app guide)](#about-flipsay-in-app-guide)
 - [Wi-Fi module](#wi-fi-module-marauder)
+- [TTX: transmit a file](#ttx-transmit-a-file)
 - [SDR Mode and GQRX](#sdr-mode-and-gqrx)
 - [Limits and how it compares](#limits-and-how-it-compares)
 - [Requirements and install](#requirements-and-install)
@@ -98,7 +99,7 @@ The CC1101's receiver gain stages can be set manually: LNA gain, mixer gain and 
 - A saved-decodes manager lets you browse, inspect and delete the files.
 
 ### Parallel Gather (PG)
-Uses the internal and external radio together. Because it runs two radios at once, enabling it takes four full-screen warnings, each confirmed by holding OK, and it is **off every time the app starts**.
+Uses the internal and external radio together. Because it runs two radios at once, enabling it shows a full-screen warning that you confirm by holding OK, and it is **off every time the app starts**.
 
 <img src="docs/images/14-pg-warning.png" width="520" alt="Parallel Gather warning">
 
@@ -126,6 +127,9 @@ Each window's band is chosen on the Multi Use options page.
 
 ### Wi-Fi module (Marauder)
 Multi Use can show the **official Flipper Zero Wi-Fi Devboard** running **ESP32 Marauder** firmware. FlipSay only listens (passive scan and sniff commands) and shows what comes back in four view modes: AP list, channel occupancy, packet rate graph and raw log. If the board does not answer, or answers but is not running Marauder, the window says so and tells you to update the firmware. Details: [docs/WIFI_MODULE.md](docs/WIFI_MODULE.md).
+
+### TTX: transmit a file
+**TTX** plays back a `.sub` file you pick (*Options > TTX (Transmit)*) through the internal CC1101, the external CC1101, or **both at once on two antennas, each on its own frequency** (DUAL). It uses the firmware's own transmit path and limits: it never bypasses the region or band rules, it has no noise or carrier-only modes, and it transmits only while you hold OK (hard limit 20 seconds per press). A warning is shown every time you open it. Transmitting is regulated, so only send what you are allowed to send. Details, safety behavior and messages: [docs/TTX.md](docs/TTX.md).
 
 ### SDR Mode and GQRX
 *Options > SDR Mode* turns the Flipper into a spectrum source for [GQRX](https://gqrx.dk) (Linux/macOS) or [SDR++](https://github.com/AlexandreRouma/SDRPlusPlus) (Windows), or any rtl_tcp client, over USB. The screen goes black and shows "Waiting for USB to connect", then "Connecting" and "Connected" while a school bus drives back and forth along the bottom. A small PC script, `tools/flipsay_sdr_bridge.py`, does the rest. This is a **spectrum / waterfall link, not a real SDR**: there is no IQ and no audio. Details and setup: [docs/SDR_MODE.md](docs/SDR_MODE.md). Step-by-step for Windows: [Connect FlipSay to SDR++](docs/SDR_PLUSPLUS.md).
@@ -158,16 +162,24 @@ Multi Use can show the **official Flipper Zero Wi-Fi Devboard** running **ESP32 
 - Some things overlap with the stock Sub-GHz app. *Read RAW* already has an RSSI threshold, and *Read* already decodes known protocols. What FlipSay adds is that it finds the frequency for you: Auto Decode watches the common remote frequencies plus the strongest peak from the spectrum, decodes with the firmware's protocol library, and saves the `.sub` files automatically. It decodes the remote-style protocols only (weather, TPMS and sensor protocols are ignored), so it will not decode everything the stock app can.
 
 ### Other limits
-- **Receive only.** There is no transmit function.
+- **Transmit is limited to TTX.** TTX only plays back `.sub` files you choose, within the firmware's region and band limits. Everything else (spectrum views, Auto Decode, SDR Mode, Wi-Fi) is receive-only, and FlipSay never transmits on its own.
 - Auto Decode uses one radio at a time. It cannot decode two frequencies simultaneously.
 - The Wi-Fi window is passive and needs Marauder firmware on the devboard.
 ## Requirements and install
 
-- Flipper Zero running [Momentum firmware](https://momentum-fw.dev) (dev channel recommended).
+- A Flipper Zero running one of these firmwares (each needs its own file, because the app API differs):
+
+  | Firmware | Download | Built against |
+  |---|---|---|
+  | [Momentum](https://momentum-fw.dev) (dev channel) | `flipsay-momentum.fap` | API 87.1 |
+  | [Unleashed](https://github.com/DarkFlippers/unleashed-firmware) (release) | `flipsay-unleashed.fap` | API 88.19 |
+  | RogueMaster | `flipsay-unleashed.fap` | RogueMaster is based on Unleashed and uses API 88.x, so the Unleashed file is the one to try. It has not been tested on RogueMaster |
+
+  Firmware differences: Momentum can move the CC1101 / NRF24 chip select to pin 7 (*Radio & Pins*). On Unleashed and RogueMaster the chip select is fixed on pin 4, so the CC1101 and the NRF24 cannot share the header there. If the app says the API is wrong after a firmware update, download the matching file from the latest release.
 - Optional: an external CC1101 module and/or an NRF24L01+ module (see [wiring](docs/WIRING.md)).
 
 Install:
-1. Download `flipsay.fap` from the [latest release](https://github.com/itsc0c0/flipsay/releases).
+1. Download the `.fap` for your firmware from the [latest release](https://github.com/itsc0c0/flipsay/releases) (see the table above) and rename it to `flipsay.fap` if you like.
 2. Copy it to `SD Card/apps/Sub-GHz/` with qFlipper or an SD card reader.
 3. Open **Apps > Sub-GHz > FlipSay FAP**.
 
@@ -213,7 +225,7 @@ Tips: raise **Decode Sens** if nothing is caught, and note that rolling-code rem
 
 ### 6. Parallel Gather
 1. Wire both radios (see [wiring](docs/WIRING.md)).
-2. Open **Options > Parallel Gather > PG: Enable...**, read each of the four warnings and hold OK to continue. The radio restarts.
+2. Open **Options > Parallel Gather > PG: Enable...**, read the warning and hold OK to confirm. The radio restarts.
 3. Choose **PG Mode**:
    - **Merged** needs an external CC1101. Use **PG Combine** (best of two or average) and the **Int Offset / Ext Offset** levels to balance the antennas.
    - **Multi Use** works with any mix of the internal CC1101, external CC1101, NRF24 and the Wi-Fi module (none of them is required). Pick the layout and what each window shows under **Options > Multi Use**.
@@ -231,11 +243,17 @@ Tips: raise **Decode Sens** if nothing is caught, and note that rolling-code rem
 3. It switches to "Connecting". Run `python tools/flipsay_sdr_bridge.py` on the PC. The Flipper then says "Connected".
 4. In SDR++ (Windows) choose the **RTL-TCP** source with host `127.0.0.1`, port `1234`, 2.4 MSPS, and press play. In GQRX (Linux/macOS) set the device string to `rtl_tcp=127.0.0.1:1234` and the input rate to 2400000. Tune around, change the sample rate or the gain, and the Flipper follows. Press Back on the Flipper to leave SDR Mode.
 
-### 9. Logging and screenshots
+### 9. TTX: transmit a file
+1. **Options > TTX (Transmit)**, read the warning, hold OK.
+2. Pick a `.sub` file. Choose MODE (INT, EXT or DUAL), the frequency of each antenna and the number of passes. Each antenna shows `READY`, `REGION`, `BAND OFF`, `NO RADIO` and so on.
+3. **Hold OK** to transmit and keep holding. Letting go or pressing Back stops it.
+Full guide: [docs/TTX.md](docs/TTX.md).
+
+### 10. Logging and screenshots
 - **Tools > Log CSV** starts and stops logging of every sweep to `/ext/apps_data/flipsay/`.
 - **Tools > Snapshot** saves the current screen as a BMP.
 
-### 10. Leaving
+### 11. Leaving
 Hold **Back** to exit. Settings are saved on exit, or any time with **Tools > Save Settings**.
 
 ## Options reference
@@ -256,6 +274,7 @@ Open with **OK**. Left / Right changes a value, OK runs an action, Back goes up 
 | **System** | Memory (free / largest block), Stack free, Lite Mode, Intro (Full / Fast), Replay Intro |
 | **Tools & Files** | Freeze, Reset Hold, Cursor > Peak, Marker B, Add Bookmark, Bookmarks, Log CSV, Snapshot, Capture .sub, Save Settings |
 | **SDR Mode (GQRX)** | Starts the USB spectrum link for the PC bridge |
+| **TTX (Transmit)** | Warning, then pick a `.sub` file and transmit it on INT, EXT or both |
 | **Help / About / Exit** | Key help and wiring pages, the illustrated About FlipSay guide, exit |
 
 ## Controls
@@ -290,10 +309,19 @@ Multi Use wifi window: Left / Right = view, Up / Down = capture mode. SDR Mode: 
 
 ```
 pip install ufbt
-ufbt update --index-url=https://up.momentum-fw.dev/firmware/directory.json --channel=dev
+ufbt update --index-url=https://up.momentum-fw.dev/firmware/directory.json --channel=dev     # Momentum
 ufbt            # builds dist/flipsay.fap
 ufbt launch     # builds and runs it on a connected Flipper
 ```
+
+For Unleashed / RogueMaster build against the Unleashed SDK instead:
+
+```
+ufbt update --index-url=https://up.unleashedflip.com/directory.json --channel=release
+ufbt
+```
+
+The same source builds for both. `src/flipsay_compat.h` holds the few things that differ (the pin selection and ESP UART settings that only Momentum has).
 
 The code is in `src/`:
 
@@ -306,6 +334,8 @@ The code is in `src/`:
 | `flipsay_gfx.c` | Tiny font, dithering, drawing helpers |
 | `flipsay_about.c` | About guide pages, SDR Mode screen and school bus |
 | `flipsay_sdr.c` | USB CDC link to the PC bridge (SDR Mode) |
+| `flipsay_ttx.c` | TTX file browser and transmit screens (the transmitting is in `flipsay_radio.c`) |
+| `flipsay_compat.h` | Firmware differences (Momentum vs Unleashed / RogueMaster) |
 | `flipsay_io.c` | Settings, bookmarks, screenshots, saved decodes |
 
 The PC side of SDR Mode is `tools/flipsay_sdr_bridge.py` (Python 3, `numpy`, `pyserial`).
@@ -318,4 +348,4 @@ The PC side of SDR Mode is `tools/flipsay_sdr_bridge.py` (Python 3, `numpy`, `py
 
 Licensed under the **GNU GPL v3.0**, see [LICENSE](LICENSE).
 
-Use responsibly and only on signals and devices you are allowed to monitor. Parallel Gather runs two radios at once, so read the in-app warnings.
+Use responsibly: only monitor signals you are allowed to monitor, and only transmit (TTX) what you are allowed to transmit, on frequencies that are legal where you are. Parallel Gather runs two radios at once and TTX can transmit on two, so read the in-app warnings.

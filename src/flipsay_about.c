@@ -3,7 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#define ABOUT_PAGES 14
+#define ABOUT_PAGES 15
 
 enum { KeyUp, KeyDown, KeyLeft, KeyRight, KeyOk, KeyBack };
 
@@ -38,7 +38,7 @@ static const char* const text_pages[][6] = {
      "AND THE STRONGEST PEAK",
      "DECODES STATIC + ROLLING",
      "SAVES .SUB FILES TO SD",
-     "RX ONLY. NEVER TRANSMITS"},
+     "DECODING IS RX ONLY"},
     {"PARALLEL GATHER",
      "RUN INT + EXT AT ONCE",
      "MERGED = BEST OF BOTH",
@@ -63,6 +63,12 @@ static const char* const text_pages[][6] = {
      "GQRX SHOWS THE SPECTRUM",
      "TUNE + GAIN FROM GQRX",
      "SWEEP DATA, NOT TRUE IQ"},
+    {"TTX TRANSMIT",
+     "SENDS A .SUB FILE YOU PICK",
+     "INT + EXT AT ONCE (DUAL)",
+     "HOLD OK TO SEND, LET GO",
+     "TO STOP. REGION LIMITS",
+     "OF THE FIRMWARE APPLY"},
     {"TOOLS",
      "LOG CSV  SNAPSHOT",
      "CAPTURE RAW .SUB",
@@ -220,8 +226,8 @@ static void draw_credits(Canvas* c) {
     gfx_text_center(c, 64, 12, "FLIPSAY V" FS_VERSION);
     gfx_text_scaled(c, 24, 20, "BY ITSC0C0", 2);
     gfx_text_center(c, 64, 35, "GITHUB.COM/ITSC0C0/FLIPSAY");
-    gfx_text_center(c, 64, 43, "GPL-3.0  RX ONLY");
-    gfx_text_center(c, 64, 50, "RSSI SWEEP, NOT A TRUE SDR");
+    gfx_text_center(c, 64, 43, "GPL-3.0  " FS_FW_NAME);
+    gfx_text_center(c, 64, 50, "RSSI SWEEP, NO IQ");
 }
 
 void fs_about_draw(Canvas* canvas, FsApp* a) {
@@ -230,8 +236,8 @@ void fs_about_draw(Canvas* canvas, FsApp* a) {
 
     const char* title = "ABOUT FLIPSAY";
     if(pg >= 1 && pg <= 4) title = "HOW TO USE";
-    if(pg >= 5 && pg <= 12) title = text_pages[pg - 5][0];
-    if(pg == 13) title = "CREDITS";
+    if(pg >= 5 && pg <= 13) title = text_pages[pg - 5][0];
+    if(pg == 14) title = "CREDITS";
     if(pg != 0) {
         canvas_draw_box(canvas, 0, 0, 128, 8);
         canvas_set_color(canvas, ColorWhite);
@@ -253,7 +259,7 @@ void fs_about_draw(Canvas* canvas, FsApp* a) {
         gfx_text(canvas, 58, 14, kp->title);
         gfx_hline(58, 124, 21);
         for(int i = 0; i < 3; i++) gfx_text(canvas, 58, 26 + i * 8, kp->line[i]);
-    } else if(pg <= 12) {
+    } else if(pg <= 13) {
         const char* const* t = text_pages[pg - 5];
         if(pg == 9) {
             draw_layout_icons(canvas, a, 11);
@@ -265,7 +271,7 @@ void fs_about_draw(Canvas* canvas, FsApp* a) {
         draw_credits(canvas);
     }
 
-    if(pg == 0 || pg == 13) {
+    if(pg == 0 || pg == 14) {
         gfx_text_center(canvas, 64, 58, pg == 0 ? "RIGHT: HOW TO USE" : "BACK: CLOSE");
     } else {
         gfx_text(canvas, 2, 58, "< >");

@@ -159,10 +159,11 @@ enum {
 };
 
 #define ROOT_SDR   P_COUNT
-#define ROOT_HELP  (P_COUNT + 1)
-#define ROOT_ABOUT (P_COUNT + 2)
-#define ROOT_EXIT  (P_COUNT + 3)
-#define ROOT_COUNT (P_COUNT + 4)
+#define ROOT_TTX   (P_COUNT + 1)
+#define ROOT_HELP  (P_COUNT + 2)
+#define ROOT_ABOUT (P_COUNT + 3)
+#define ROOT_EXIT  (P_COUNT + 4)
+#define ROOT_COUNT (P_COUNT + 5)
 #define PAGE_ROOT  0xFF
 
 static const char* const page_names[P_COUNT] = {
@@ -1578,11 +1579,9 @@ static void draw_pins(Canvas* canvas, FsApp* a) {
     }
 }
 
-static const char* const warn_text[4][5] = {
-    {"DANGER", "PARALLEL GATHER RUNS", "BOTH RADIOS AT ONCE", "AND CAN HURT YOUR", "FLIPPER HARDWARE"},
-    {"HIGH POWER DRAW", "MORE HEAT + BATTERY", "DRAIN. THE 5V RAIL", "IS LOADED BY BOTH", "RADIO MODULES"},
-    {"WIRING RISK", "BAD OR SHORTED WIRES", "CAN DESTROY THE", "FLIPPER OR MODULE", "CHECK PINS FIRST"},
-    {"LAST WARNING", "RX ONLY - NO TX", "BUT YOU USE THIS AT", "YOUR OWN RISK", "HOLD OK = ENABLE"},
+static const char* const warn_text[2][5] = {
+    {"PARALLEL GATHER", "RUNS BOTH RADIOS", "MORE HEAT + BATTERY", "BAD WIRING CAN", "DAMAGE THE FLIPPER"},
+    {"TTX = TRANSMIT", "SEND ONLY SIGNALS", "YOU OWN OR MAY USE", "NO JAMMING. LOCAL", "LAW APPLIES."},
 };
 
 static void draw_warn_sign(Canvas* canvas, int cx, int cy, bool inv) {
@@ -1603,15 +1602,14 @@ static void draw_warn_sign(Canvas* canvas, int cx, int cy, bool inv) {
 
 static void draw_warn(Canvas* canvas, FsApp* a) {
     FsUi* ui = &a->ui;
-    int st = ui->warn_step % 4;
+    int st = ui->warn_kind % 2;
     uint32_t el = furi_get_tick() - ui->warn_tick;
     bool blink = ((furi_get_tick() / 280) & 1) != 0;
     canvas_set_color(canvas, ColorBlack);
     canvas_draw_box(canvas, 0, 0, 128, 8);
     canvas_set_color(canvas, ColorWhite);
     char b[28];
-    snprintf(b, sizeof(b), "! WARNING %d/4 !", st + 1);
-    gfx_text_center(canvas, 64, 1, b);
+    gfx_text_center(canvas, 64, 1, st ? "! TTX WARNING !" : "! WARNING !");
     canvas_set_color(canvas, ColorBlack);
 
     draw_warn_sign(canvas, 22, 28, blink);
@@ -1625,7 +1623,7 @@ static void draw_warn(Canvas* canvas, FsApp* a) {
         snprintf(b, sizeof(b), "READ... %d", (int)((1600 - el) / 400) + 1);
         gfx_text_center(canvas, 64, 52, b);
     } else {
-        gfx_text_center(canvas, 64, 52, st == 3 ? "HOLD OK: ENABLE PG" : "HOLD OK: CONTINUE");
+        gfx_text_center(canvas, 64, 52, st ? "HOLD OK: OPEN TTX" : "HOLD OK: ENABLE PG");
     }
     gfx_text_center(canvas, 64, 58, "BACK = CANCEL");
 }
@@ -1781,10 +1779,10 @@ static void menu_value(const FsApp* a, int id, char* out, size_t n) {
                   presets0[c->preset[0] % N_PRESETS0].name);
         break;
     case M_PIN_CC:
-        snprintf(out, n, "%s", c->pin_cc ? "PIN 7" : "PIN 4");
+        snprintf(out, n, "%s", !FS_HAS_PIN_SELECT ? "PIN 4 FIXED" : (c->pin_cc ? "PIN 7" : "PIN 4"));
         break;
     case M_PIN_NRF:
-        snprintf(out, n, "%s", c->pin_nrf ? "PIN 7" : "PIN 4");
+        snprintf(out, n, "%s", !FS_HAS_PIN_SELECT ? "PIN 4 FIXED" : (c->pin_nrf ? "PIN 7" : "PIN 4"));
         break;
     case M_RES:
         snprintf(out, n, "%d BINS", c->res ? 64 : 128);
@@ -2008,11 +2006,19 @@ static void menu_adjust(FsApp* a, int id, int dir) {
         apply_preset_fam(a, fam);
         break;
     case M_PIN_CC:
+        if(!FS_HAS_PIN_SELECT) {
+            fs_ui_toast(a, "CS PIN FIXED ON THIS FW");
+            break;
+        }
         c->pin_cc ^= 1;
         a->restart_req = true;
         fs_ui_toast(a, c->pin_cc ? "CC1101 CS = PIN 7" : "CC1101 CS = PIN 4");
         break;
     case M_PIN_NRF:
+        if(!FS_HAS_PIN_SELECT) {
+            fs_ui_toast(a, "CS PIN FIXED ON THIS FW");
+            break;
+        }
         c->pin_nrf ^= 1;
         a->restart_req = true;
         fs_ui_toast(a, c->pin_nrf ? "NRF24 CS = PIN 7" : "NRF24 CS = PIN 4");
@@ -2225,7 +2231,7 @@ static bool menu_activate(FsApp* a, int id) {
             a->restart_req = true;
             fs_ui_toast(a, "PARALLEL GATHER OFF");
         } else {
-            ui->warn_step = 0;
+            ui->warn_kind = 0;
             ui->warn_tick = furi_get_tick();
             ui->mode = FsUiWarn;
         }
@@ -2367,6 +2373,7 @@ static void draw_menu(Canvas* canvas, FsApp* a) {
         if(ui->menu_page == PAGE_ROOT) {
             const char* s = idx < P_COUNT ? page_names[idx] :
                             idx == ROOT_SDR   ? "SDR MODE (GQRX)" :
+                            idx == ROOT_TTX   ? "TTX (TRANSMIT)" :
                             idx == ROOT_ABOUT ? "ABOUT FLIPSAY" :
                                                 "EXIT APP";
             canvas_draw_str(canvas, 3, y + 8, s);
@@ -2555,6 +2562,10 @@ void fs_ui_draw(Canvas* canvas, void* ctx) {
     case FsUiSdr:
         fs_sdr_draw(canvas, a);
         overlays = false;
+        break;
+    case FsUiTtxBrowse:
+    case FsUiTtxSetup:
+        fs_ttx_draw(canvas, a);
         break;
     default: {
         if(!ch) break;
@@ -2966,6 +2977,14 @@ static bool menu_input(FsApp* a, const InputEvent* ev) {
                         fs_sdr_open(a);
                     else
                         fs_ui_toast(a, "NO RADIO READY");
+                } else if(s == ROOT_TTX) {
+                    if(a->status == FsStatusOk && fs_family(a) == 0) {
+                        ui->warn_kind = 1;
+                        ui->warn_tick = furi_get_tick();
+                        ui->mode = FsUiWarn;
+                    } else {
+                        fs_ui_toast(a, "NEEDS A CC1101 SOURCE");
+                    }
                 } else if(s == ROOT_HELP) {
                     ui->mode = FsUiHelp;
                     ui->help_page = 0;
@@ -3075,6 +3094,11 @@ bool fs_ui_input(FsApp* a, const InputEvent* ev) {
     FsUi* ui = &a->ui;
     if(ev->type == InputTypeRelease) {
         ui->scroll_rep = 0;
+        if(ui->mode == FsUiTtxSetup) {
+            furi_mutex_acquire(a->mtx, FuriWaitForever);
+            fs_ttx_release(a, ev->key);
+            furi_mutex_release(a->mtx);
+        }
         return true;
     }
     if(ev->type != InputTypeShort && ev->type != InputTypeLong && ev->type != InputTypeRepeat)
@@ -3117,9 +3141,10 @@ bool fs_ui_input(FsApp* a, const InputEvent* ev) {
             } else if(
                 ev->key == InputKeyOk && ev->type == InputTypeLong &&
                 (now - ui->warn_tick) >= 1600) {
-                ui->warn_step++;
                 ui->warn_tick = now;
-                if(ui->warn_step >= 4) {
+                if(ui->warn_kind == 1) {
+                    fs_ttx_open(a);
+                } else {
                     a->pg_on = true;
                     a->restart_req = true;
                     ui->mode = FsUiView;
@@ -3160,6 +3185,10 @@ bool fs_ui_input(FsApp* a, const InputEvent* ev) {
             break;
         case FsUiSdr:
             if(ev->key == InputKeyBack && ev->type == InputTypeShort) fs_sdr_close(a);
+            break;
+        case FsUiTtxBrowse:
+        case FsUiTtxSetup:
+            fs_ttx_input(a, ev);
             break;
         case FsUiExiting:
             break;
@@ -3212,6 +3241,8 @@ bool fs_ui_tick(FsApp* a) {
         fs_worker_start(a);
         ui->dirty = true;
     }
+
+    fs_ttx_reap(a);
 
     if(a->worker_msg_flag) {
         a->worker_msg_flag = false;
@@ -3272,7 +3303,7 @@ bool fs_ui_tick(FsApp* a) {
     sig += (uint32_t)a->meter_head * 13 + (uint32_t)a->act_head * 17 + a->scope_bursts * 19 +
            a->pkt_total * 23 + (uint32_t)a->dec_state * 29 + a->status;
     bool anim = ui->mode == FsUiSplash || ui->mode == FsUiExiting || ui->mode == FsUiWarn ||
-                ui->mode == FsUiAbout || ui->mode == FsUiSdr ||
+                ui->mode == FsUiAbout || ui->mode == FsUiSdr || ui->mode == FsUiTtxSetup ||
                 ui->fade_start != 0 || (a->nt_start && now - a->nt_start < 5100) ||
                 (ui->toast_until && now < ui->toast_until) || a->log_active ||
                 (ch && ch->trig_active) || a->dec_state == 2;
